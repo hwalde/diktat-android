@@ -61,7 +61,7 @@ Fertige APK aus dem neuesten Release laden und installieren:
 
 ```bash
 gh release download -R hwalde/diktat-android --pattern '*.apk' --dir /tmp/diktat --clobber
-# ohne gh: curl -L -o /tmp/diktat/diktat.apk https://github.com/hwalde/diktat-android/releases/latest/download/diktat.apk
+# ohne gh: curl -L --create-dirs -o /tmp/diktat/diktat.apk https://github.com/hwalde/diktat-android/releases/latest/download/diktat.apk
 adb install -r /tmp/diktat/*.apk
 ```
 

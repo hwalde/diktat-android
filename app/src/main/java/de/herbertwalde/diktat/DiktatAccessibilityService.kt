@@ -76,7 +76,8 @@ class DiktatAccessibilityService : AccessibilityService(), OverlayController.Lis
         running = false
         recorder?.let { rec ->
             recorder = null
-            saveInterruptedRecording(rec)
+            runCatching { saveInterruptedRecording(rec) }
+                .onFailure { Log.e(TAG, "Unterbrochene Aufnahme konnte nicht gesichert werden", it) }
         }
         if (::overlay.isInitialized) overlay.destroy()
         super.onDestroy()
