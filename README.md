@@ -28,17 +28,19 @@ Wortzahl im Verhältnis zur Sprechdauer auffällig niedrig, wird der Eintrag als
 
 ## Aufbau
 
-- `DiktatAccessibilityService`: erkennt das Textfeld, steuert Aufnahme und Einfügen. Zwei Fälle:
-  1. **Normale Textfelder** (Chrome, Messenger, Formulare): Das fokussierte Feld meldet sich als bearbeitbar.
-     Eingefügt wird per `ACTION_SET_TEXT` an der Cursor-Position, mit bis zu 1,2 s Nachprüfung, weil Chrome
-     verzögert übernimmt.
-  2. **Eigene Editoren** (z. B. Samsung Notes): Der Fokus liegt auf einer ScrollView, die nicht bearbeitbar ist.
-     Erkannt wird das an der sichtbaren Tastatur. Eingefügt wird über die Eingabeverbindung der Bedienungshilfe
-     (`AccessibilityService.getInputMethod()`, Android 13+, `flagInputMethodEditor`), also genau wie mit einer
-     Tastatur. Der Feldinhalt wird dabei nie ersetzt.
-
-  Rückfälle in dieser Reihenfolge: Eingabeverbindung, dann Zwischenablage + `ACTION_PASTE`, dann nur
-  Zwischenablage mit Hinweis. Passwortfelder sind ausgenommen.
+- `DiktatAccessibilityService`: erkennt das Textfeld, steuert Aufnahme und Einfügen.
+  - **Erkennung, zwei Fälle:** (1) Das fokussierte Feld meldet sich als bearbeitbar (Chrome, Messenger,
+    Formulare). (2) Die Tastatur ist sichtbar, das Feld meldet sich aber nicht als bearbeitbar (eigene Editoren
+    wie Samsung Notes). Passwortfelder sind ausgenommen, erkannt am Feld selbst und am Eingabetyp der Tastatur.
+  - **Aufnahme:** Sie läuft weiter, bis ✓ oder ✕ gedrückt wird, auch beim Scrollen oder beim Wechsel der App.
+  - **Einfügen beim Bestätigen:** Nur wenn dann ein Textfeld den Fokus hat. Sonst bleibt der Text im Verlauf und
+    liegt zusätzlich in der Zwischenablage, mit Hinweis.
+  - **Reihenfolge:** Zuerst die Eingabeverbindung der Bedienungshilfe
+    (`AccessibilityService.getInputMethod()`, Android 13+, `flagInputMethodEditor`). Sie schreibt wie eine Tastatur
+    am Cursor und ersetzt nie Inhalt, ist also sicher für Rich Text, Checklisten und Bilder in Notizen. Rückfall nur
+    für normale Felder ist `ACTION_SET_TEXT` mit bis zu 1,2 s Nachprüfung (Chrome übernimmt verzögert). Danach
+    Zwischenablage + `ACTION_PASTE` am selben Feld, zuletzt nur Zwischenablage mit Hinweis. Für Rich-Text-Apps
+    (Samsung Notes, Keep) gibt es nie `ACTION_SET_TEXT`.
 - `OverlayController` / `WaveformView`: Mikrofon-Bubble und Aufnahme-Leiste (`TYPE_ACCESSIBILITY_OVERLAY`,
   nie fokussierbar, damit die Tastatur offen bleibt)
 - `ModelManager`: lädt die 4 Modelldateien von Hugging Face über den DownloadManager und prüft SHA-256
