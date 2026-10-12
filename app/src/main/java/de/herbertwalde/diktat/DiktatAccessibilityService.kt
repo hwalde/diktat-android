@@ -66,13 +66,41 @@ class DiktatAccessibilityService : AccessibilityService(), OverlayController.Lis
         overlay = OverlayController(this, app.settings, this)
         app.warmUp()
         refreshFocus()
+        app.interruptedEntryId?.let {
+            app.interruptedEntryId = null
+            toast("Diktat wurde vom System neu gestartet. Die laufende Aufnahme ist im Verlauf gespeichert.")
+        }
     }
 
     override fun onDestroy() {
         running = false
-        recorder?.cancel()
+        recorder?.let { rec ->
+            recorder = null
+            saveInterruptedRecording(rec)
+        }
         if (::overlay.isInitialized) overlay.destroy()
         super.onDestroy()
+    }
+
+    /**
+     * Android kann die Bedienungshilfe jederzeit beenden und neu verbinden (z. B. wenn ein anderer Dienst die
+     * Bedienungshilfen kurz übernimmt). Die laufende Aufnahme geht dann nicht verloren: Sie wird gespeichert und
+     * im Hintergrund erkannt. Eingefügt wird nichts, der Text steht im Verlauf.
+     */
+    private fun saveInterruptedRecording(rec: AudioRecorder) {
+        val pcm = rec.stop()
+        stopForegroundForMic()
+        if (pcm.size < AudioRecorder.SAMPLE_RATE / 5 * 2) return
+        val id = System.currentTimeMillis()
+        Wav.write(app.history.audioFile(id), pcm)
+        app.history.put(
+            HistoryStore.Entry(
+                id, id, SystemClock.elapsedRealtime() - recordingStartedAt, "", HistoryStore.Status.PENDING,
+                targetApp = targetPackage,
+            ),
+        )
+        app.interruptedEntryId = id
+        app.worker.execute { app.transcribeEntry(id) }
     }
 
     override fun onInterrupt() {}

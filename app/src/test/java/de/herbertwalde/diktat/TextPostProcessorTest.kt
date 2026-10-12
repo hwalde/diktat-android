@@ -58,4 +58,13 @@ class TextPostProcessorTest {
 
     @Test fun anthropikWirdAnthropic() =
         assertEquals("Das Modell von Anthropic.", TextPostProcessor.applyCustomWords("Das Modell von Anthropik.", herbertsWoerter))
+
+    @Test
+    fun cloudOpusWirdClaudeOpusMitMehrwortEintrag() {
+        val words = listOf("Claude", "Claude Code", "Claude Opus", "Anthropic", "Haiku")
+        assertEquals(
+            "Heute hat Claude Opus diese Anwendung entwickelt. Wir gehen in die Cloud.",
+            TextPostProcessor.applyCustomWords("Heute hat Cloud Opus diese Anwendung entwickelt. Wir gehen in die Cloud.", words),
+        )
+    }
 }

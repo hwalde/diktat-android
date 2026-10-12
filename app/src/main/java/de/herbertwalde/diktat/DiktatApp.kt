@@ -14,6 +14,9 @@ class DiktatApp : Application() {
     /** Ein einziger Thread für Modell-Laden und Transkription: das Modell braucht ~1 GB RAM und ist nicht parallel nutzbar. */
     val worker = Executors.newSingleThreadExecutor { Thread(it, "diktat-asr") }
 
+    /** Aufnahme, die beim Beenden der Bedienungshilfe gesichert wurde. Beim Neustart gibt es dazu einen Hinweis. */
+    @Volatile var interruptedEntryId: Long? = null
+
     override fun onCreate() {
         super.onCreate()
         models = ModelManager(this)

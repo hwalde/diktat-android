@@ -6,4 +6,5 @@
     <string name="cd_mic">Diktat starten</string>
     <string name="cd_cancel">Aufnahme abbrechen</string>
     <string name="cd_confirm">Aufnahme übernehmen</string>
+    <string name="about">Diktat ist Open Source (MIT-Lizenz), ohne Gewähr und ohne Haftung.\nhttps://github.com/hwalde/diktat-android\n\nSpracherkennung: Parakeet TDT 0.6B v3 von NVIDIA (CC BY 4.0) über sherpa-onnx (Apache 2.0) und ONNX Runtime (MIT). Wörterbuch- und Füllwort-Logik nach Handy von CJ Pais (MIT).\n\nGeschrieben von Claude Opus 5.5 (Anthropic) mit Claude Code, im Auftrag von Herbert Walde.</string>
 </resources>

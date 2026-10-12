@@ -1,6 +1,13 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
 }
+
+// Eigener Release-Schlüssel, falls vorhanden (keystore.properties liegt nicht im Repo).
+// Ohne diese Datei wird der Release-Build mit dem Debug-Schlüssel signiert, so kann jeder selbst bauen.
+val keystoreProps = rootProject.file("keystore.properties").takeIf { it.exists() }
+    ?.let { f -> Properties().apply { f.inputStream().use { load(it) } } }
 
 android {
     namespace = "de.herbertwalde.diktat"
@@ -10,19 +17,29 @@ android {
         applicationId = "de.herbertwalde.diktat"
         minSdk = 31
         targetSdk = 36
-        versionCode = 6
-        versionName = "1.0"
+        versionCode = 8
+        versionName = "1.0.0"
         ndk {
-            // Galaxy S26 Ultra ist arm64. Andere ABIs nur, damit der Emulator (x86_64) läuft.
+            // Praktisch alle aktuellen Handys sind arm64. x86_64 nur für den Emulator.
             abiFilters += listOf("arm64-v8a", "x86_64")
+        }
+    }
+
+    signingConfigs {
+        if (keystoreProps != null) {
+            create("release") {
+                storeFile = file(keystoreProps.getProperty("storeFile"))
+                storePassword = keystoreProps.getProperty("storePassword")
+                keyAlias = keystoreProps.getProperty("keyAlias")
+                keyPassword = keystoreProps.getProperty("keyPassword")
+            }
         }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
-            // Privat genutzte App: mit dem Debug-Schlüssel signiert, damit Updates per adb ohne Neuinstallation gehen.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
         }
     }
 

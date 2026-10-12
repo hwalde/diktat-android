@@ -182,7 +182,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginBottom="8dp"
-            android:text="Jede Aufnahme bleibt gespeichert. Fehlt Text, kannst du sie erneut erkennen lassen."
+            android:text="Die letzten 100 Aufnahmen bleiben auf dem Handy gespeichert. Fehlt Text, kannst du sie erneut erkennen lassen."
             android:textAppearance="?attr/textAppearanceBodySmall"
             android:textColor="?attr/colorOnSurfaceVariant" />
 
@@ -200,5 +200,17 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:nestedScrollingEnabled="false" />
+
+        <!-- ============ Über ============ -->
+        <TextView
+            android:id="@+id/about"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="32dp"
+            android:autoLink="web"
+            android:lineSpacingMultiplier="1.2"
+            android:text="@string/about"
+            android:textAppearance="?attr/textAppearanceBodySmall"
+            android:textColor="?attr/colorOnSurfaceVariant" />
     </LinearLayout>
 </androidx.core.widget.NestedScrollView>
