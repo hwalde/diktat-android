@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="seed">#3D5AFE</color>
+    <color name="pill_bg">#F2FFFFFF</color>
+    <color name="pill_fg">#1C1B1F</color>
+    <color name="wave">#1C1B1F</color>
+</resources>

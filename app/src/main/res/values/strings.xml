@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Diktat</string>
+    <string name="accessibility_label">Diktat – Sprechen statt Tippen</string>
+    <string name="accessibility_description">Zeigt ein Mikrofon-Symbol, sobald du in ein Textfeld tippst. Ein Tipp darauf nimmt deine Sprache auf, wandelt sie direkt auf dem Handy in Text um (Parakeet v3, offline) und fügt ihn in das Textfeld ein. Diktat liest dafür nur das gerade ausgewählte Textfeld. Es werden keine Daten verschickt.</string>
+    <string name="cd_mic">Diktat starten</string>
+    <string name="cd_cancel">Aufnahme abbrechen</string>
+    <string name="cd_confirm">Aufnahme übernehmen</string>
+</resources>
