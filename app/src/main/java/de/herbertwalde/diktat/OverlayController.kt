@@ -77,7 +77,7 @@ class OverlayController(
     private val screenH get() = context.resources.displayMetrics.heightPixels
     private val bubbleSize get() = px(52)
 
-    private fun defaultBubbleX() = screenW - bubbleSize - px(12)
+    private fun defaultBubbleX() = screenW - bubbleSize - px(28)
     private fun defaultBubbleY() = (screenH * 0.42).toInt()
 
     // ------------------------------------------------------------------ öffentliche Zustände
@@ -157,11 +157,11 @@ class OverlayController(
         }
         val container = FrameLayout(context).apply {
             // Etwas Rand, damit der Schatten nicht abgeschnitten wird.
-            setPadding(px(6), px(6), px(6), px(6))
+            setPadding(px(14), px(14), px(14), px(14))
             clipToPadding = false
             addView(view, FrameLayout.LayoutParams(size, size))
         }
-        val lp = baseParams(size + px(12), size + px(12)).apply {
+        val lp = baseParams(size + px(28), size + px(28)).apply {
             x = settings.bubbleX.takeIf { it >= 0 } ?: defaultBubbleX()
             y = settings.bubbleY.takeIf { it >= 0 } ?: defaultBubbleY()
         }

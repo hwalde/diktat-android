@@ -90,8 +90,19 @@ object Wav {
         file.outputStream().use { it.write(header.array()); it.write(pcm16) }
     }
 
-    /** Liest eine von [write] erzeugte WAV-Datei als Float-Samples in [-1, 1]. */
-    fun readFloats(file: File): FloatArray = pcmToFloats(file.readBytes().copyOfRange(44, file.length().toInt()))
+    /** Liest eine 16-bit-Mono-WAV-Datei als Float-Samples in [-1, 1] (sucht den data-Block, Zusatzblöcke werden übersprungen). */
+    fun readFloats(file: File): FloatArray {
+        val bytes = file.readBytes()
+        val bb = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
+        var pos = 12
+        while (pos + 8 <= bytes.size) {
+            val id = String(bytes, pos, 4, Charsets.US_ASCII)
+            val len = bb.getInt(pos + 4)
+            if (id == "data") return pcmToFloats(bytes.copyOfRange(pos + 8, minOf(bytes.size, pos + 8 + len)))
+            pos += 8 + len + (len and 1)
+        }
+        error("Keine Audiodaten in ${file.name}")
+    }
 
     fun pcmToFloats(pcm16: ByteArray): FloatArray {
         val sb = ByteBuffer.wrap(pcm16).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer()
