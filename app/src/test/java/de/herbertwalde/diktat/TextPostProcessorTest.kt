@@ -38,4 +38,24 @@ class TextPostProcessorTest {
         assertEquals("A261", TextPostProcessor.soundex("Ashcraft"))
         assertEquals("T522", TextPostProcessor.soundex("Tymczak"))
     }
+
+    private val herbertsWoerter = listOf("Claude", "Claude Code", "Anthropic", "Haiku")
+
+    @Test fun cloudBleibtCloud() =
+        assertEquals("Wir gehen in die Cloud.", TextPostProcessor.applyCustomWords("Wir gehen in die Cloud.", herbertsWoerter))
+
+    @Test fun heikeBleibtHeike() =
+        assertEquals("Heike kommt morgen.", TextPostProcessor.applyCustomWords("Heike kommt morgen.", herbertsWoerter))
+
+    @Test fun anthropischBleibtAnthropisch() =
+        assertEquals("ein anthropisch geprägter Blick", TextPostProcessor.applyCustomWords("ein anthropisch geprägter Blick", herbertsWoerter))
+
+    @Test fun pluralBleibtStehen() =
+        assertEquals("Ich schreibe Haikus.", TextPostProcessor.applyCustomWords("Ich schreibe Haikus.", herbertsWoerter))
+
+    @Test fun klaudeWirdClaude() =
+        assertEquals("Frag Claude.", TextPostProcessor.applyCustomWords("Frag Klaude.", herbertsWoerter))
+
+    @Test fun anthropikWirdAnthropic() =
+        assertEquals("Das Modell von Anthropic.", TextPostProcessor.applyCustomWords("Das Modell von Anthropik.", herbertsWoerter))
 }

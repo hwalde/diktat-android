@@ -9,6 +9,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -16,6 +17,7 @@ import android.os.SystemClock
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityWindowInfo
 import android.widget.Toast
 
 class DiktatAccessibilityService : AccessibilityService(), OverlayController.Listener {
@@ -35,13 +37,25 @@ class DiktatAccessibilityService : AccessibilityService(), OverlayController.Lis
     private var recorder: AudioRecorder? = null
     private var recordingStartedAt = 0L
 
-    /** Das Textfeld, in das der Text am Ende eingefügt wird. */
+    /**
+     * Das Textfeld, in das der Text am Ende eingefügt wird. [targetPasteOnly] = true bei Apps mit eigenem Editor
+     * (z. B. Samsung Notes), deren Feld sich nicht als bearbeitbar meldet: Dort wird nur eingefügt (ACTION_PASTE),
+     * nie der Feldinhalt ersetzt – sonst könnte eine Notiz überschrieben werden.
+     */
     private var target: AccessibilityNodeInfo? = null
+    private var targetPasteOnly = false
     private var targetPackage: String? = null
     /** Aufnahme, die gerade transkribiert wird bzw. fehlgeschlagen ist (für Retry). */
     private var currentEntryId: Long? = null
 
     private val hideRunnable = Runnable { overlay.hide() }
+    /** Fehler-Leiste schließen, wenn der Nutzer das Feld verlassen hat (die Aufnahme bleibt im Verlauf). */
+    private val dismissErrorRunnable = Runnable {
+        if (overlay.mode == OverlayController.Mode.ERROR && findTarget() == null) {
+            currentEntryId = null
+            overlay.reset()
+        }
+    }
 
     override fun onServiceConnected() {
         running = true
@@ -65,27 +79,54 @@ class DiktatAccessibilityService : AccessibilityService(), OverlayController.Lis
         refreshFocus()
     }
 
+    private class Target(val node: AccessibilityNodeInfo, val pasteOnly: Boolean)
+
+    private fun isOwnNonTestField(node: AccessibilityNodeInfo) =
+        node.packageName == packageName && node.viewIdResourceName != "$packageName:id/testField"
+
     private fun focusedEditable(): AccessibilityNodeInfo? {
         val node = runCatching { findFocus(AccessibilityNodeInfo.FOCUS_INPUT) }.getOrNull() ?: return null
         // Eigene App nur für das Testfeld auf der Einstellungsseite.
-        if (node.packageName == packageName && node.viewIdResourceName != "$packageName:id/testField") return null
+        if (isOwnNonTestField(node)) return null
         if (!node.isEditable || node.isPassword) return null
         return node
     }
 
+    private fun keyboardVisible(): Boolean = runCatching {
+        windows.any { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD }
+    }.getOrDefault(false)
+
+    /**
+     * Ermittelt das Ziel-Feld. Normalfall: das fokussierte, bearbeitbare Feld. Sonderfall: Die Tastatur ist offen,
+     * aber die App meldet ihr Feld nicht als bearbeitbar (eigene Editoren wie Samsung Notes) – dann gilt das
+     * fokussierte Element als Ziel im reinen Einfüge-Modus.
+     */
+    private fun findTarget(): Target? {
+        focusedEditable()?.let { return Target(it, pasteOnly = false) }
+        if (!keyboardVisible()) return null
+        val focused = runCatching { findFocus(AccessibilityNodeInfo.FOCUS_INPUT) }.getOrNull()
+            ?: runCatching { rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) }.getOrNull()
+            ?: return null
+        if (isOwnNonTestField(focused) || focused.isPassword) return null
+        return Target(focused, pasteOnly = true)
+    }
+
     private fun refreshFocus() {
         if (!::overlay.isInitialized) return
-        val node = focusedEditable()
+        val found = findTarget()
         when (overlay.mode) {
-            OverlayController.Mode.RECORDING, OverlayController.Mode.BUSY, OverlayController.Mode.ERROR -> {
-                // Während der Aufnahme bleibt das Ziel-Feld fest; ein neues fokussiertes Feld wird zum Ziel.
-                if (node != null) { target = node; targetPackage = node.packageName?.toString() }
+            OverlayController.Mode.RECORDING, OverlayController.Mode.BUSY -> {
+                // Während Aufnahme/Erkennung bleibt das Ziel fest; ein neu fokussiertes Feld wird zum Ziel.
+                if (found != null) setTarget(found)
+            }
+            OverlayController.Mode.ERROR -> {
+                main.removeCallbacks(dismissErrorRunnable)
+                if (found != null) setTarget(found) else main.postDelayed(dismissErrorRunnable, 600)
             }
             else -> {
-                if (node != null) {
+                if (found != null) {
                     main.removeCallbacks(hideRunnable)
-                    target = node
-                    targetPackage = node.packageName?.toString()
+                    setTarget(found)
                     overlay.showBubble()
                 } else {
                     // Kurz warten: Beim Wechsel zwischen Feldern verliert das alte Feld den Fokus vor dem neuen.
@@ -94,6 +135,12 @@ class DiktatAccessibilityService : AccessibilityService(), OverlayController.Lis
                 }
             }
         }
+    }
+
+    private fun setTarget(t: Target) {
+        target = t.node
+        targetPasteOnly = t.pasteOnly
+        targetPackage = t.node.packageName?.toString()
     }
 
     // ------------------------------------------------------------------ Aufnahme
@@ -131,7 +178,7 @@ class DiktatAccessibilityService : AccessibilityService(), OverlayController.Lis
         recorder = null
         stopForegroundForMic()
         currentEntryId = null
-        overlay.showBubble()
+        overlay.reset()
         refreshFocus()
     }
 
@@ -144,6 +191,7 @@ class DiktatAccessibilityService : AccessibilityService(), OverlayController.Lis
         val duration = SystemClock.elapsedRealtime() - recordingStartedAt
 
         if (pcm.size < AudioRecorder.SAMPLE_RATE / 5 * 2) { // < 0,2 s
+            toast("Aufnahme zu kurz")
             overlay.showBubble(); refreshFocus(); return
         }
         val id = System.currentTimeMillis()
@@ -184,7 +232,7 @@ class DiktatAccessibilityService : AccessibilityService(), OverlayController.Lis
                         copyToClipboard(entry.text)
                         toast("Einfügen nicht möglich – Text liegt in der Zwischenablage.")
                     } else if (entry.status == HistoryStore.Status.SUSPICIOUS) {
-                        toast("Text wirkt unvollständig. In der Diktat-App kannst du „Erneut erkennen“ wählen.")
+                        toast("Text wirkt unvollständig. In der Diktat-App unter Verlauf „Erneut erkennen“ wählen – das Ergebnis liegt dann in der Zwischenablage.")
                     }
                     refreshFocus()
                 }
@@ -202,9 +250,19 @@ class DiktatAccessibilityService : AccessibilityService(), OverlayController.Lis
      * 2. Weg (Feld bleibt unverändert, z. B. manche Rich-Text-Editoren): Zwischenablage + ACTION_PASTE.
      * Manche Apps (z. B. Chrome) übernehmen SET_TEXT verzögert. Deshalb wird bis zu 600 ms nachgeprüft, bevor
      * der 2. Weg greift – sonst landet der Text doppelt im Feld.
+     * Bis zu 1,2 s wird nachgeprüft; erst dann gilt das Feld als unverändert.
      */
     private fun insertText(text: String, done: (Boolean) -> Unit) {
-        val node = target?.takeIf { it.refresh() } ?: focusedEditable() ?: return done(false)
+        val node = target?.takeIf { it.refresh() } ?: findTarget()?.also { setTarget(it) }?.node ?: return done(false)
+        val supportsSetText = node.actionList.any { it.id == AccessibilityNodeInfo.ACTION_SET_TEXT }
+        if (targetPasteOnly || !node.isEditable || !supportsSetText) {
+            // Eigener Editor (z. B. Samsung Notes): Text wie die Tastatur über die Eingabeverbindung an der
+            // Cursor-Position schreiben. Nur falls das nicht geht: Einfügen über die Zwischenablage durchprobieren.
+            if (commitViaInputMethod(text)) return done(true)
+            val candidates = (listOf(node) + editableNodesIn(node.window?.root ?: rootInActiveWindow))
+                .distinct().filterNot { it.isPassword }
+            return done(pasteIntoFirst(candidates, "$text "))
+        }
         fun fieldText(n: AccessibilityNodeInfo) = if (n.isShowingHintText) "" else n.text?.toString() ?: ""
         val current = fieldText(node)
         var start = node.textSelectionStart
@@ -225,10 +283,10 @@ class DiktatAccessibilityService : AccessibilityService(), OverlayController.Lis
             Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, expected) },
         )
         if (!setOk) {
-            Log.i(TAG, "SET_TEXT abgelehnt, versuche Einfügen über die Zwischenablage")
-            return done(pasteViaClipboard(node, insert))
+            Log.i(TAG, "SET_TEXT abgelehnt, versuche Eingabeverbindung bzw. Zwischenablage")
+            return done(commitViaInputMethod(text) || pasteViaClipboard(node, insert))
         }
-        val checks = longArrayOf(0, 100, 250, 600)
+        val checks = longArrayOf(0, 100, 250, 600, 1200)
         fun check(i: Int) {
             val now = if (node.refresh()) fieldText(node) else null
             when {
@@ -246,12 +304,61 @@ class DiktatAccessibilityService : AccessibilityService(), OverlayController.Lis
                 }
                 i + 1 < checks.size -> main.postDelayed({ check(i + 1) }, checks[i + 1] - checks[i])
                 else -> {
-                    Log.i(TAG, "SET_TEXT ohne Wirkung, versuche Einfügen über die Zwischenablage")
-                    done(pasteViaClipboard(node, insert))
+                    Log.i(TAG, "SET_TEXT ohne Wirkung, versuche Eingabeverbindung bzw. Zwischenablage")
+                    done(commitViaInputMethod(text) || pasteViaClipboard(node, insert))
                 }
             }
         }
         check(0)
+    }
+
+    /**
+     * Schreibt [text] über die Eingabeverbindung des fokussierten Felds (Android 13+, flagInputMethodEditor) –
+     * genau wie eine Tastatur. Funktioniert auch bei Editoren, die SET_TEXT und PASTE nicht unterstützen.
+     */
+    private fun commitViaInputMethod(text: String): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return false
+        val ic = runCatching { inputMethod?.currentInputConnection }.getOrNull() ?: return false
+        return runCatching {
+            val surrounding = ic.getSurroundingText(1, 1, 0)
+            val beforeCursor = surrounding?.let {
+                val sel = it.selectionStart.coerceIn(0, it.text.length)
+                it.text.subSequence(0, sel).toString()
+            } ?: ""
+            val prefix = if (beforeCursor.isNotEmpty() && !beforeCursor.last().isWhitespace()) " " else ""
+            ic.commitText(prefix + text, 1, null)
+            Log.i(TAG, "Eingefügt über die Eingabeverbindung")
+            true
+        }.getOrElse { Log.w(TAG, "Eingabeverbindung fehlgeschlagen: ${it.message}"); false }
+    }
+
+    private fun editableNodesIn(root: AccessibilityNodeInfo?): List<AccessibilityNodeInfo> {
+        val out = mutableListOf<AccessibilityNodeInfo>()
+        fun walk(n: AccessibilityNodeInfo?, depth: Int) {
+            if (n == null || depth > 40 || out.size > 20) return
+            if (n.isEditable || n.className?.toString()?.endsWith("EditText") == true) out += n
+            for (i in 0 until n.childCount) walk(n.getChild(i), depth + 1)
+        }
+        walk(root, 0)
+        val r = android.graphics.Rect()
+        return out.sortedByDescending { it.getBoundsInScreen(r); r.width().toLong() * r.height() }
+    }
+
+    private fun pasteIntoFirst(candidates: List<AccessibilityNodeInfo>, text: String): Boolean {
+        for (c in candidates) {
+            Log.i(TAG, "Einfüge-Kandidat ${c.className} editable=${c.isEditable} focused=${c.isFocused} " +
+                "actions=${c.actionList.map { it.id }}")
+            if (pasteViaClipboard(c, text)) {
+                Log.i(TAG, "Eingefügt über ${c.className}")
+                return true
+            }
+            // Manche Editoren (Samsung Notes) nehmen das Einfügen erst an, wenn ihr Text-Element den Fokus hat.
+            if (!c.isFocused && c.performAction(AccessibilityNodeInfo.ACTION_FOCUS) && pasteViaClipboard(c, text)) {
+                Log.i(TAG, "Eingefügt über ${c.className} nach Fokus")
+                return true
+            }
+        }
+        return false
     }
 
     private fun pasteViaClipboard(node: AccessibilityNodeInfo, text: String): Boolean {

@@ -96,6 +96,13 @@ class OverlayController(
         mode = Mode.HIDDEN
     }
 
+    /** Leiste schließen und in den Ruhezustand zurück; der Aufrufer entscheidet danach über die Bubble. */
+    fun reset() {
+        removePill()
+        bubble?.visibility = View.GONE
+        mode = Mode.HIDDEN
+    }
+
     /** Erzwingt das Ausblenden (z. B. beim Beenden des Dienstes). */
     fun destroy() {
         removePill()

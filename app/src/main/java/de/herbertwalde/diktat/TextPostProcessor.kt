@@ -62,8 +62,16 @@ object TextPostProcessor {
             val maxAllowedDiff = max(maxLen * 0.25, 2.0)
             if (lenDiff > maxAllowedDiff) continue
 
-            val levScore = if (maxLen > 0) levenshtein(candidate, k.key) / maxLen else 1.0
-            val phonetic = supportsSoundex(candidate) && supportsSoundex(k.key) && soundex(candidate) == soundex(k.key)
+            // Abweichung von Handy: Gebeugte Formen des Eintrags („Haikus“, „Claudes“) bleiben stehen.
+            if (candidate.length > k.key.length && candidate.startsWith(k.key)) continue
+            val dist = levenshtein(candidate, k.key)
+            val levScore = if (maxLen > 0) dist / maxLen else 1.0
+            // Abweichung von Handy: Den Soundex-Bonus gibt es nur bei einem abweichenden Zeichen – oder wenn ein
+            // langer Eintrag (ab 8 Zeichen) verkürzt erkannt wurde („Charge B“ → „ChargeBee“). Sonst werden echte
+            // Wörter ersetzt (z. B. „Cloud“ → „Claude“, „Heike“ → „Haiku“).
+            val bonusAllowed = dist <= 1 || (k.key.length >= 8 && candidate.length < k.key.length)
+            val phonetic = bonusAllowed && supportsSoundex(candidate) && supportsSoundex(k.key) &&
+                soundex(candidate) == soundex(k.key)
             val combined = if (phonetic) levScore * 0.3 else levScore
             if (combined < threshold && combined < bestScore) {
                 best = customWords[k.wordIndex]

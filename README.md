@@ -28,8 +28,17 @@ Wortzahl im Verhältnis zur Sprechdauer auffällig niedrig, wird der Eintrag als
 
 ## Aufbau
 
-- `DiktatAccessibilityService`: erkennt das fokussierte Textfeld, steuert Aufnahme und Einfügen
-  (zuerst `ACTION_SET_TEXT`, als Rückfall Zwischenablage + `ACTION_PASTE`)
+- `DiktatAccessibilityService`: erkennt das Textfeld, steuert Aufnahme und Einfügen. Zwei Fälle:
+  1. **Normale Textfelder** (Chrome, Messenger, Formulare): Das fokussierte Feld meldet sich als bearbeitbar.
+     Eingefügt wird per `ACTION_SET_TEXT` an der Cursor-Position, mit bis zu 1,2 s Nachprüfung, weil Chrome
+     verzögert übernimmt.
+  2. **Eigene Editoren** (z. B. Samsung Notes): Der Fokus liegt auf einer ScrollView, die nicht bearbeitbar ist.
+     Erkannt wird das an der sichtbaren Tastatur. Eingefügt wird über die Eingabeverbindung der Bedienungshilfe
+     (`AccessibilityService.getInputMethod()`, Android 13+, `flagInputMethodEditor`), also genau wie mit einer
+     Tastatur. Der Feldinhalt wird dabei nie ersetzt.
+
+  Rückfälle in dieser Reihenfolge: Eingabeverbindung, dann Zwischenablage + `ACTION_PASTE`, dann nur
+  Zwischenablage mit Hinweis. Passwortfelder sind ausgenommen.
 - `OverlayController` / `WaveformView`: Mikrofon-Bubble und Aufnahme-Leiste (`TYPE_ACCESSIBILITY_OVERLAY`,
   nie fokussierbar, damit die Tastatur offen bleibt)
 - `ModelManager`: lädt die 4 Modelldateien von Hugging Face über den DownloadManager und prüft SHA-256
@@ -49,5 +58,20 @@ Die Release-APK ist mit dem Debug-Schlüssel signiert (private App), damit Updat
 ## Einrichtung auf dem Handy
 
 1. App „Diktat“ öffnen → Mikrofon erlauben
-2. Sprachmodell laden (670 MB, einmalig)
+2. Sprachmodell laden (670 MB, einmalig, am besten im WLAN), **oder** per USB übertragen (Sekunden statt Minuten):
+   ```bash
+   D=/sdcard/Android/data/de.herbertwalde.diktat/files/import
+   adb shell mkdir -p $D
+   for f in encoder.int8.onnx decoder.int8.onnx joiner.int8.onnx tokens.txt; do adb push <modellordner>/$f $D/; done
+   ```
+   Die App übernimmt die Dateien beim nächsten Öffnen. Vorher prüft sie die SHA-256-Prüfsumme, danach bricht sie
+   einen laufenden Download ab.
 3. Bedienungshilfe „Diktat“ einschalten (Einstellungen → Eingabehilfe → Installierte Apps)
+
+## Wörterbuch
+
+Ähnlich klingende erkannte Wörter werden durch die Schreibweise des Eintrags ersetzt (Handys Verfahren).
+Abweichend von Handy werden echte Wörter geschützt:
+- Den Soundex-Bonus gibt es nur bei einem abweichenden Zeichen oder bei verkürzt erkannten langen Einträgen.
+  So bleibt „Cloud“ stehen und wird nicht zu „Claude“, und „Heike“ wird nicht zu „Haiku“.
+- Gebeugte Formen bleiben stehen: „Haikus“ wird nicht zu „Haiku“.
