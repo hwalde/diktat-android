@@ -14,6 +14,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.text.InputType
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
@@ -26,6 +27,9 @@ class DiktatAccessibilityService : AccessibilityService(), OverlayController.Lis
         private const val TAG = "Diktat"
         private const val CHANNEL = "recording"
         private const val NOTIFICATION_ID = 1
+
+        /** Apps mit Rich-Text-Editor: dort nie ACTION_SET_TEXT (würde Formatierung/Checklisten/Bilder verlieren). */
+        private val RICH_TEXT_APPS = setOf("com.samsung.android.app.notes", "com.google.android.keep")
 
         /** Für die Einstellungs-Seite: läuft der Dienst gerade? */
         @Volatile var running = false
@@ -88,8 +92,22 @@ class DiktatAccessibilityService : AccessibilityService(), OverlayController.Lis
         val node = runCatching { findFocus(AccessibilityNodeInfo.FOCUS_INPUT) }.getOrNull() ?: return null
         // Eigene App nur für das Testfeld auf der Einstellungsseite.
         if (isOwnNonTestField(node)) return null
-        if (!node.isEditable || node.isPassword) return null
+        if (!node.isEditable || node.isPassword || editorIsPassword()) return null
         return node
+    }
+
+    /** Passwortfeld laut Eingabetyp der Tastatur (greift auch bei Apps mit eigenem Editor, z. B. Banking). */
+    private fun editorIsPassword(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return false
+        val type = runCatching { inputMethod?.currentInputEditorInfo?.inputType }.getOrNull() ?: return false
+        val variation = type and InputType.TYPE_MASK_VARIATION
+        return when (type and InputType.TYPE_MASK_CLASS) {
+            InputType.TYPE_CLASS_TEXT -> variation == InputType.TYPE_TEXT_VARIATION_PASSWORD ||
+                variation == InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD ||
+                variation == InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD
+            InputType.TYPE_CLASS_NUMBER -> variation == InputType.TYPE_NUMBER_VARIATION_PASSWORD
+            else -> false
+        }
     }
 
     private fun keyboardVisible(): Boolean = runCatching {
@@ -107,7 +125,7 @@ class DiktatAccessibilityService : AccessibilityService(), OverlayController.Lis
         val focused = runCatching { findFocus(AccessibilityNodeInfo.FOCUS_INPUT) }.getOrNull()
             ?: runCatching { rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) }.getOrNull()
             ?: return null
-        if (isOwnNonTestField(focused) || focused.isPassword) return null
+        if (isOwnNonTestField(focused) || focused.isPassword || editorIsPassword()) return null
         return Target(focused, pasteOnly = true)
     }
 
@@ -226,6 +244,17 @@ class DiktatAccessibilityService : AccessibilityService(), OverlayController.Lis
         when (entry.status) {
             HistoryStore.Status.OK, HistoryStore.Status.SUSPICIOUS -> {
                 currentEntryId = null
+                // Eingefügt wird nur, wenn beim Bestätigen (noch oder wieder) ein Textfeld den Fokus hat.
+                // Sonst bleibt der Text im Verlauf und liegt zusätzlich in der Zwischenablage.
+                val now = findTarget()
+                if (now == null) {
+                    copyToClipboard(entry.text)
+                    overlay.reset()
+                    toast("Kein Textfeld ausgewählt – Text ist im Verlauf gespeichert und in der Zwischenablage.")
+                    refreshFocus()
+                    return
+                }
+                setTarget(now)
                 insertText(entry.text) { ok ->
                     overlay.showBubble()
                     if (!ok) {
@@ -253,15 +282,14 @@ class DiktatAccessibilityService : AccessibilityService(), OverlayController.Lis
      * Bis zu 1,2 s wird nachgeprüft; erst dann gilt das Feld als unverändert.
      */
     private fun insertText(text: String, done: (Boolean) -> Unit) {
-        val node = target?.takeIf { it.refresh() } ?: findTarget()?.also { setTarget(it) }?.node ?: return done(false)
+        val node = target?.takeIf { it.refresh() } ?: return done(false)
+        // 1. Weg überall: wie eine Tastatur über die Eingabeverbindung an der Cursor-Position schreiben.
+        //    Ersetzt nie Feldinhalt – sicher auch für Rich Text (Formatierung, Checklisten, Bilder in Notizen).
+        if (commitViaInputMethod(text)) return done(true)
         val supportsSetText = node.actionList.any { it.id == AccessibilityNodeInfo.ACTION_SET_TEXT }
-        if (targetPasteOnly || !node.isEditable || !supportsSetText) {
-            // Eigener Editor (z. B. Samsung Notes): Text wie die Tastatur über die Eingabeverbindung an der
-            // Cursor-Position schreiben. Nur falls das nicht geht: Einfügen über die Zwischenablage durchprobieren.
-            if (commitViaInputMethod(text)) return done(true)
-            val candidates = (listOf(node) + editableNodesIn(node.window?.root ?: rootInActiveWindow))
-                .distinct().filterNot { it.isPassword }
-            return done(pasteIntoFirst(candidates, "$text "))
+        if (targetPasteOnly || !node.isEditable || !supportsSetText || node.packageName in RICH_TEXT_APPS) {
+            // Eigener Editor: nur einfügen, nie den Inhalt setzen – und nur in das Feld mit dem Cursor.
+            return done(pasteViaClipboard(node, "$text "))
         }
         fun fieldText(n: AccessibilityNodeInfo) = if (n.isShowingHintText) "" else n.text?.toString() ?: ""
         val current = fieldText(node)
@@ -320,45 +348,17 @@ class DiktatAccessibilityService : AccessibilityService(), OverlayController.Lis
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return false
         val ic = runCatching { inputMethod?.currentInputConnection }.getOrNull() ?: return false
         return runCatching {
+            // commitText meldet keinen Erfolg zurück. Deshalb vorher prüfen, ob die Verbindung lebt:
+            // Eine ungültige Verbindung (Tastatur zu, Feld gewechselt) liefert keinen Umgebungstext.
             val surrounding = ic.getSurroundingText(1, 1, 0)
-            val beforeCursor = surrounding?.let {
-                val sel = it.selectionStart.coerceIn(0, it.text.length)
-                it.text.subSequence(0, sel).toString()
-            } ?: ""
+                ?: return false.also { Log.i(TAG, "Eingabeverbindung ohne Antwort – nicht verwendet") }
+            val sel = surrounding.selectionStart.coerceIn(0, surrounding.text.length)
+            val beforeCursor = surrounding.text.subSequence(0, sel).toString()
             val prefix = if (beforeCursor.isNotEmpty() && !beforeCursor.last().isWhitespace()) " " else ""
             ic.commitText(prefix + text, 1, null)
             Log.i(TAG, "Eingefügt über die Eingabeverbindung")
             true
         }.getOrElse { Log.w(TAG, "Eingabeverbindung fehlgeschlagen: ${it.message}"); false }
-    }
-
-    private fun editableNodesIn(root: AccessibilityNodeInfo?): List<AccessibilityNodeInfo> {
-        val out = mutableListOf<AccessibilityNodeInfo>()
-        fun walk(n: AccessibilityNodeInfo?, depth: Int) {
-            if (n == null || depth > 40 || out.size > 20) return
-            if (n.isEditable || n.className?.toString()?.endsWith("EditText") == true) out += n
-            for (i in 0 until n.childCount) walk(n.getChild(i), depth + 1)
-        }
-        walk(root, 0)
-        val r = android.graphics.Rect()
-        return out.sortedByDescending { it.getBoundsInScreen(r); r.width().toLong() * r.height() }
-    }
-
-    private fun pasteIntoFirst(candidates: List<AccessibilityNodeInfo>, text: String): Boolean {
-        for (c in candidates) {
-            Log.i(TAG, "Einfüge-Kandidat ${c.className} editable=${c.isEditable} focused=${c.isFocused} " +
-                "actions=${c.actionList.map { it.id }}")
-            if (pasteViaClipboard(c, text)) {
-                Log.i(TAG, "Eingefügt über ${c.className}")
-                return true
-            }
-            // Manche Editoren (Samsung Notes) nehmen das Einfügen erst an, wenn ihr Text-Element den Fokus hat.
-            if (!c.isFocused && c.performAction(AccessibilityNodeInfo.ACTION_FOCUS) && pasteViaClipboard(c, text)) {
-                Log.i(TAG, "Eingefügt über ${c.className} nach Fokus")
-                return true
-            }
-        }
-        return false
     }
 
     private fun pasteViaClipboard(node: AccessibilityNodeInfo, text: String): Boolean {
