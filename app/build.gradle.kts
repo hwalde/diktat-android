@@ -10,7 +10,7 @@ android {
         applicationId = "de.herbertwalde.diktat"
         minSdk = 31
         targetSdk = 36
-        versionCode = 1
+        versionCode = 3
         versionName = "1.0"
         ndk {
             // Galaxy S26 Ultra ist arm64. Andere ABIs nur, damit der Emulator (x86_64) läuft.

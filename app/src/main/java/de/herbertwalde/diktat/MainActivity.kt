@@ -134,7 +134,7 @@ class MainActivity : AppCompatActivity() {
 
     /** Fragt den Download-Fortschritt jede Sekunde ab, solange die Seite sichtbar ist. */
     private fun startPolling() {
-        if (polling || app.models.isReady()) return
+        if (polling) return
         polling = true
         thread(name = "diktat-poll") {
             while (polling) {
@@ -144,7 +144,7 @@ class MainActivity : AppCompatActivity() {
                     app.warmUp()
                     break
                 }
-                if (st is ModelManager.State.Failed || st is ModelManager.State.Missing) break
+                if (st is ModelManager.State.Failed) break
                 Thread.sleep(1000)
             }
             polling = false

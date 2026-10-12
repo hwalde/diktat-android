@@ -41,6 +41,12 @@ class ModelManager(private val context: Context) {
     /** Download-Zwischenablage (DownloadManager darf nur in externe App-Ordner schreiben). */
     private val downloadDir: File = File(context.getExternalFilesDir(null), "download").apply { mkdirs() }
 
+    /**
+     * Alternativer Weg ohne Internet: Dateien per USB hierher kopieren
+     * (adb push … /sdcard/Android/data/de.herbertwalde.diktat/files/import/). Sie werden nach Prüfung übernommen.
+     */
+    private val importDir: File = File(context.getExternalFilesDir(null), "import").apply { mkdirs() }
+
     private val dm = context.getSystemService(DownloadManager::class.java)
     private val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
@@ -92,6 +98,15 @@ class ModelManager(private val context: Context) {
         for (f in FILES) {
             val target = File(modelDir, f.name)
             if (target.length() == f.size) { done += f.size; continue }
+            val imported = File(importDir, f.name)
+            if (imported.length() == f.size && (f.sha256 == null || sha256(imported) == f.sha256)) {
+                imported.copyTo(target, overwrite = true)
+                imported.delete()
+                prefs.getLong(f.name, -1L).takeIf { it >= 0 }?.let { dm.remove(it) }
+                prefs.edit().remove(f.name).apply()
+                done += f.size
+                continue
+            }
             val id = prefs.getLong(f.name, -1L)
             if (id < 0) continue
             when (statusOf(id)) {

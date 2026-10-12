@@ -178,15 +178,16 @@ class DiktatAccessibilityService : AccessibilityService(), OverlayController.Lis
         when (entry.status) {
             HistoryStore.Status.OK, HistoryStore.Status.SUSPICIOUS -> {
                 currentEntryId = null
-                val ok = insertText(entry.text)
-                overlay.showBubble()
-                if (!ok) {
-                    copyToClipboard(entry.text)
-                    toast("Einfügen nicht möglich – Text liegt in der Zwischenablage.")
-                } else if (entry.status == HistoryStore.Status.SUSPICIOUS) {
-                    toast("Text wirkt unvollständig. In der Diktat-App kannst du „Erneut erkennen“ wählen.")
+                insertText(entry.text) { ok ->
+                    overlay.showBubble()
+                    if (!ok) {
+                        copyToClipboard(entry.text)
+                        toast("Einfügen nicht möglich – Text liegt in der Zwischenablage.")
+                    } else if (entry.status == HistoryStore.Status.SUSPICIOUS) {
+                        toast("Text wirkt unvollständig. In der Diktat-App kannst du „Erneut erkennen“ wählen.")
+                    }
+                    refreshFocus()
                 }
-                refreshFocus()
             }
             HistoryStore.Status.EMPTY -> overlay.showError("Nichts verstanden")
             else -> overlay.showError("Erkennung fehlgeschlagen")
@@ -196,14 +197,16 @@ class DiktatAccessibilityService : AccessibilityService(), OverlayController.Lis
     // ------------------------------------------------------------------ Einfügen
 
     /**
-     * Fügt [text] an der Cursor-Position des Ziel-Felds ein (ersetzt eine Markierung).
+     * Fügt [text] an der Cursor-Position des Ziel-Felds ein (ersetzt eine Markierung) und meldet das Ergebnis an [done].
      * 1. Weg: ACTION_SET_TEXT mit dem zusammengesetzten Feldinhalt – lässt die Zwischenablage unberührt.
-     * 2. Weg (z. B. Browser/Rich-Text-Editoren): Zwischenablage + ACTION_PASTE, danach alte Zwischenablage zurück.
+     * 2. Weg (Feld bleibt unverändert, z. B. manche Rich-Text-Editoren): Zwischenablage + ACTION_PASTE.
+     * Manche Apps (z. B. Chrome) übernehmen SET_TEXT verzögert. Deshalb wird bis zu 600 ms nachgeprüft, bevor
+     * der 2. Weg greift – sonst landet der Text doppelt im Feld.
      */
-    private fun insertText(text: String): Boolean {
-        val node = target?.takeIf { it.refresh() } ?: focusedEditable() ?: return false
-        val showingHint = node.isShowingHintText
-        val current = if (showingHint) "" else node.text?.toString() ?: ""
+    private fun insertText(text: String, done: (Boolean) -> Unit) {
+        val node = target?.takeIf { it.refresh() } ?: focusedEditable() ?: return done(false)
+        fun fieldText(n: AccessibilityNodeInfo) = if (n.isShowingHintText) "" else n.text?.toString() ?: ""
+        val current = fieldText(node)
         var start = node.textSelectionStart
         var end = node.textSelectionEnd
         if (start < 0 || end < 0 || start > current.length || end > current.length) { start = current.length; end = current.length }
@@ -211,28 +214,44 @@ class DiktatAccessibilityService : AccessibilityService(), OverlayController.Lis
 
         val before = current.substring(0, start)
         val after = current.substring(end)
-        val needsSpaceBefore = before.isNotEmpty() && !before.last().isWhitespace() && !before.endsWith("\n")
+        val needsSpaceBefore = before.isNotEmpty() && !before.last().isWhitespace()
         val needsSpaceAfter = after.isNotEmpty() && !after.first().isWhitespace() && after.first() !in ".,!?;:)"
         val insert = (if (needsSpaceBefore) " " else "") + text + (if (needsSpaceAfter) " " else "")
         val expected = before + insert + after
+        val cursor = before.length + insert.length
 
         val setOk = node.performAction(
             AccessibilityNodeInfo.ACTION_SET_TEXT,
             Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, expected) },
         )
-        if (setOk && node.refresh() && node.text?.toString() == expected) {
-            val cursor = before.length + insert.length
-            node.performAction(
-                AccessibilityNodeInfo.ACTION_SET_SELECTION,
-                Bundle().apply {
-                    putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, cursor)
-                    putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, cursor)
-                },
-            )
-            return true
+        if (!setOk) {
+            Log.i(TAG, "SET_TEXT abgelehnt, versuche Einfügen über die Zwischenablage")
+            return done(pasteViaClipboard(node, insert))
         }
-        Log.i(TAG, "SET_TEXT nicht übernommen (ok=$setOk), versuche Einfügen über die Zwischenablage")
-        return pasteViaClipboard(node, insert)
+        val checks = longArrayOf(0, 100, 250, 600)
+        fun check(i: Int) {
+            val now = if (node.refresh()) fieldText(node) else null
+            when {
+                now != null && now != current -> {
+                    if (now == expected) {
+                        node.performAction(
+                            AccessibilityNodeInfo.ACTION_SET_SELECTION,
+                            Bundle().apply {
+                                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, cursor)
+                                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, cursor)
+                            },
+                        )
+                    }
+                    done(true)
+                }
+                i + 1 < checks.size -> main.postDelayed({ check(i + 1) }, checks[i + 1] - checks[i])
+                else -> {
+                    Log.i(TAG, "SET_TEXT ohne Wirkung, versuche Einfügen über die Zwischenablage")
+                    done(pasteViaClipboard(node, insert))
+                }
+            }
+        }
+        check(0)
     }
 
     private fun pasteViaClipboard(node: AccessibilityNodeInfo, text: String): Boolean {
